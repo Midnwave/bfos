@@ -1874,6 +1874,10 @@ class TerminalSession:
   {ANSIColors.BRIGHT_WHITE}staff add <user> <role>{ANSIColors.RESET}  - Add staff to user
   {ANSIColors.BRIGHT_WHITE}staff remove <user>{ANSIColors.RESET}      - Remove all staff from user
   {ANSIColors.BRIGHT_WHITE}staff sync{ANSIColors.RESET}               - Sync Discord roles with database
+
+{ANSIColors.BRIGHT_CYAN}Permissions:{ANSIColors.RESET}
+  {ANSIColors.BRIGHT_WHITE}permissions{ANSIColors.RESET}              - Open permissions management panel
+
   {ANSIColors.BRIGHT_WHITE}help{ANSIColors.RESET}                     - Show detailed help
   {ANSIColors.BRIGHT_WHITE}back{ANSIColors.RESET}                     - Return to main menu
   {ANSIColors.BRIGHT_WHITE}exit{ANSIColors.RESET}                     - Exit terminal
@@ -1920,6 +1924,11 @@ class TerminalSession:
   Fixes mismatches where users have role in Discord
   but not in database (or vice versa).
   Auto-runs when importing roles.
+
+{ANSIColors.BRIGHT_CYAN}permissions{ANSIColors.RESET}
+  Open the Permissions Management panel.
+  Assign, remove, and view permissions for users and roles.
+  Controls who can use specific bot features (tickets, XP, etc).
 
 {ANSIColors.BRIGHT_CYAN}back{ANSIColors.RESET}
   Return to main menu.

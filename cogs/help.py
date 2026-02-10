@@ -375,6 +375,82 @@ class HelpCommands(commands.Cog):
                     'module': 'logging'
                 }
             ],
+            'tickets': [
+                {
+                    'cmd_name': ';close',
+                    'usage': ';close [reason]',
+                    'description': 'Close the current ticket with an optional reason',
+                    'permission': 'Ticket Creator / ticket_close',
+                    'examples': [';close', ';close resolved'],
+                    'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';add',
+                    'usage': ';add <user>',
+                    'description': 'Add a user to the current ticket',
+                    'permission': 'ticket_add_user',
+                    'examples': [';add @User'],
+                    'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';remove',
+                    'usage': ';remove <user>',
+                    'description': 'Remove a user from the current ticket',
+                    'permission': 'ticket_remove_user',
+                    'examples': [';remove @User'],
+                    'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';rename',
+                    'usage': ';rename <name>',
+                    'description': 'Rename the current ticket channel',
+                    'permission': 'In ticket',
+                    'examples': [';rename billing-issue'],
+                    'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';claim',
+                    'usage': ';claim',
+                    'description': 'Claim the current ticket as the assigned staff member',
+                    'permission': 'ticket_claim',
+                    'examples': [';claim'],
+                    'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';transcript',
+                    'usage': ';transcript',
+                    'description': 'Generate and send a transcript to the log channel',
+                    'permission': 'ticket_close',
+                    'examples': [';transcript'],
+                    'module': 'tickets'
+                }
+            ],
+            'xp': [
+                {
+                    'cmd_name': ';stats',
+                    'usage': ';stats [user]',
+                    'description': 'Show XP stats card for yourself or another user. Aliases: ;rank, ;level',
+                    'permission': 'Everyone',
+                    'examples': [';stats', ';stats @User', ';rank'],
+                    'module': 'xp'
+                },
+                {
+                    'cmd_name': ';leaderboard',
+                    'usage': ';leaderboard [all_time|weekly|monthly]',
+                    'description': 'Show the server XP leaderboard. Aliases: ;lb, ;top',
+                    'permission': 'Everyone',
+                    'examples': [';leaderboard', ';lb weekly', ';top monthly'],
+                    'module': 'xp'
+                },
+                {
+                    'cmd_name': ';xp',
+                    'usage': ';xp <add|remove|set> <user> <amount>',
+                    'description': 'Admin XP management — add, remove, or set user XP',
+                    'permission': 'xp_admin',
+                    'examples': [';xp add @User 500', ';xp set @User 0'],
+                    'module': 'xp'
+                }
+            ],
             'system': [
                 {
                     'cmd_name': ';cmds',

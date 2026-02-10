@@ -47,6 +47,45 @@ class TicketControlView(discord.ui.View):
         await self.cog._handle_ticket_claim(interaction, interaction.channel)
 
 
+class TicketCloseConfirmView(discord.ui.View):
+    """Confirmation buttons before closing a ticket"""
+
+    def __init__(self, cog, ticket, closer: discord.Member, reason: str = None):
+        super().__init__(timeout=30)
+        self.cog = cog
+        self.ticket = ticket
+        self.closer = closer
+        self.reason = reason
+
+    @discord.ui.button(label="Confirm Close", style=discord.ButtonStyle.danger, emoji="\u2705")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.closer.id:
+            await interaction.response.send_message("Only the person who initiated the close can confirm.", ephemeral=True)
+            return
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        await self.cog._execute_ticket_close(interaction.channel, self.closer, self.reason)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="\u274c")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.closer.id:
+            await interaction.response.send_message("Only the person who initiated the close can cancel.", ephemeral=True)
+            return
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="Close Cancelled", description="Ticket close has been cancelled.", color=0x95A5A6),
+            view=self
+        )
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
 class TicketPanelView(discord.ui.View):
     """Button-based ticket panel (one button per category)"""
 
@@ -74,6 +113,8 @@ class TicketDropdownView(discord.ui.View):
 
     def __init__(self, cog, categories: list):
         super().__init__(timeout=None)
+        self.cog = cog
+        self.categories = categories
         options = []
         for cat in categories[:25]:
             options.append(discord.SelectOption(
@@ -85,15 +126,26 @@ class TicketDropdownView(discord.ui.View):
         select = discord.ui.Select(
             placeholder="Select a ticket category...",
             options=options,
+            min_values=0,
+            max_values=1,
             custom_id="bfos_ticket_dropdown",
         )
-        select.callback = self._make_callback(cog)
+        select.callback = self._make_callback(cog, self)
         self.add_item(select)
 
     @staticmethod
-    def _make_callback(cog):
+    def _make_callback(cog, view_instance):
         async def callback(interaction: discord.Interaction):
+            if not interaction.data.get('values'):
+                await interaction.response.defer()
+                return
             category_id = int(interaction.data['values'][0])
+            # Reset dropdown by replacing with fresh view
+            try:
+                fresh_view = TicketDropdownView(cog, view_instance.categories)
+                await interaction.message.edit(view=fresh_view)
+            except discord.HTTPException:
+                pass
             await cog._handle_ticket_create(interaction, category_id)
         return callback
 
@@ -448,9 +500,13 @@ class TicketSystem(commands.Cog):
             if role:
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
+        # Build channel name: ticket-username-category
+        safe_username = ''.join(c if c.isalnum() or c == '-' else '-' for c in user.display_name.lower()).strip('-')[:20] or str(ticket_number)
+        safe_category = ''.join(c if c.isalnum() or c == '-' else '-' for c in category['name'].lower()).strip('-')[:20] or 'general'
+
         try:
             channel = await guild.create_text_channel(
-                name=f"ticket-{ticket_number:04d}",
+                name=f"ticket-{safe_username}-{safe_category}",
                 category=discord_category,
                 overwrites=overwrites,
                 topic=f"Ticket #{ticket_number} | {category['name']} | {user.display_name}"
@@ -467,11 +523,24 @@ class TicketSystem(commands.Cog):
 
         # Build welcome embed
         welcome_msg = category.get('welcome_message') or f"Welcome to your ticket! A staff member will be with you shortly."
+        guild_prefix = self.db.get_command_prefix(guild.id) or ';'
         embed = discord.Embed(
             title=f"Ticket #{ticket_number} — {category['name']}",
             description=f"{welcome_msg}\n\nCreated by: {user.mention}",
             color=category.get('color', 0x5865F2),
             timestamp=datetime.utcnow()
+        )
+        embed.add_field(
+            name="Available Commands",
+            value=(
+                f"`{guild_prefix}close [reason]` — Close this ticket\n"
+                f"`{guild_prefix}add @user` — Add a user\n"
+                f"`{guild_prefix}remove @user` — Remove a user\n"
+                f"`{guild_prefix}rename <name>` — Rename channel\n"
+                f"`{guild_prefix}claim` — Claim ticket (staff)\n"
+                f"`{guild_prefix}transcript` — Get transcript (staff)"
+            ),
+            inline=False
         )
         embed.set_footer(text=f"BlockForge OS v{Config.VERSION} | Ticket ID: {ticket_id}")
 
@@ -479,22 +548,25 @@ class TicketSystem(commands.Cog):
         control_view = TicketControlView(self, ticket_id)
         await channel.send(embed=embed, view=control_view)
 
-        # Ghost-ping roles
+        # Ping roles (keep visible for staff)
         ping_roles = category.get('ping_roles', [])
         if ping_roles:
             mentions = " ".join(f"<@&{r}>" for r in ping_roles)
-            ping_msg = await channel.send(mentions)
-            try:
-                await ping_msg.delete()
-            except:
-                pass
+            await channel.send(mentions)
+
+        # Ghost-ping ticket creator (notification only, then delete)
+        try:
+            user_ping = await channel.send(user.mention)
+            await user_ping.delete()
+        except:
+            pass
 
         await interaction.followup.send(f"Ticket created: {channel.mention}", ephemeral=True)
 
     # ==================== TICKET CLOSE ====================
 
     async def _handle_ticket_close(self, interaction: discord.Interaction, channel: discord.TextChannel, reason=None):
-        """Handle ticket close from button or command"""
+        """Show close confirmation before closing a ticket"""
         ticket = self.get_ticket_by_channel(channel.id)
         if not ticket:
             if interaction:
@@ -508,8 +580,28 @@ class TicketSystem(commands.Cog):
             await interaction.response.send_message("You don't have permission to close this ticket.", ephemeral=True)
             return
 
-        if interaction and not interaction.response.is_done():
-            await interaction.response.defer()
+        confirm_embed = discord.Embed(
+            title="\U0001f512 Close Ticket?",
+            description=(
+                "Are you sure you want to close this ticket?"
+                + (f"\n**Reason:** {reason}" if reason else "")
+                + "\n\nThis action cannot be undone."
+            ),
+            color=0xE74C3C,
+            timestamp=datetime.utcnow()
+        )
+        confirm_view = TicketCloseConfirmView(self, ticket, user, reason)
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message(embed=confirm_embed, view=confirm_view)
+        else:
+            await interaction.followup.send(embed=confirm_embed, view=confirm_view)
+
+    async def _execute_ticket_close(self, channel: discord.TextChannel, closer: discord.Member, reason=None):
+        """Execute the actual ticket close (called after confirmation)"""
+        ticket = self.get_ticket_by_channel(channel.id)
+        if not ticket:
+            return
 
         config = self.get_ticket_config(ticket['guild_id'])
         close_behavior = config.get('close_behavior', 'wait_delete') if config else 'wait_delete'
@@ -522,7 +614,6 @@ class TicketSystem(commands.Cog):
 
         if close_behavior == 'wait_delete':
             delay = config.get('delete_delay_seconds', 300) if config else 300
-            # Lock channel
             try:
                 await channel.set_permissions(channel.guild.default_role, send_messages=False)
                 member = channel.guild.get_member(ticket['user_id'])
@@ -533,7 +624,7 @@ class TicketSystem(commands.Cog):
 
             embed = discord.Embed(
                 title="\U0001f512 Ticket Closed",
-                description=f"This ticket has been closed{f' by {user.mention}' if user else ''}."
+                description=f"This ticket has been closed{f' by {closer.mention}' if closer else ''}."
                             f"\n{'**Reason:** ' + reason if reason else ''}"
                             f"\n\nThis channel will be deleted in {delay // 60} minute(s).",
                 color=0xE74C3C,
@@ -547,7 +638,6 @@ class TicketSystem(commands.Cog):
                 pass
 
         elif close_behavior == 'archive':
-            # Remove user permissions but keep channel
             try:
                 member = channel.guild.get_member(ticket['user_id'])
                 if member:
@@ -556,7 +646,7 @@ class TicketSystem(commands.Cog):
                 pass
             embed = discord.Embed(
                 title="\U0001f4e6 Ticket Archived",
-                description=f"This ticket has been archived{f' by {user.mention}' if user else ''}."
+                description=f"This ticket has been archived{f' by {closer.mention}' if closer else ''}."
                             f"\n{'**Reason:** ' + reason if reason else ''}",
                 color=0x95A5A6,
                 timestamp=datetime.utcnow()
@@ -682,53 +772,18 @@ class TicketSystem(commands.Cog):
         if ctx.author.id != ticket['user_id'] and not self._has_ticket_permission(ctx.author, 'ticket_close'):
             return
 
-        # Create a fake interaction-like flow
-        config = self.get_ticket_config(ctx.guild.id)
-        close_behavior = config.get('close_behavior', 'wait_delete') if config else 'wait_delete'
-
-        self.close_ticket(ticket['id'], reason=reason)
-        await self._send_transcript(ticket, ctx.guild)
-
-        if close_behavior == 'wait_delete':
-            delay = config.get('delete_delay_seconds', 300) if config else 300
-            try:
-                member = ctx.guild.get_member(ticket['user_id'])
-                if member:
-                    await ctx.channel.set_permissions(member, send_messages=False, read_messages=True)
-            except:
-                pass
-            embed = discord.Embed(
-                title="\U0001f512 Ticket Closed",
-                description=f"Closed by {ctx.author.mention}."
-                            f"\n{'**Reason:** ' + reason if reason else ''}"
-                            f"\n\nThis channel will be deleted in {delay // 60} minute(s).",
-                color=0xE74C3C, timestamp=datetime.utcnow()
-            )
-            await ctx.send(embed=embed)
-            await asyncio.sleep(delay)
-            try:
-                await ctx.channel.delete(reason=f"Ticket #{ticket['ticket_number']} closed")
-            except:
-                pass
-        elif close_behavior == 'archive':
-            try:
-                member = ctx.guild.get_member(ticket['user_id'])
-                if member:
-                    await ctx.channel.set_permissions(member, read_messages=False)
-            except:
-                pass
-            embed = discord.Embed(
-                title="\U0001f4e6 Ticket Archived",
-                description=f"Archived by {ctx.author.mention}."
-                            f"\n{'**Reason:** ' + reason if reason else ''}",
-                color=0x95A5A6, timestamp=datetime.utcnow()
-            )
-            await ctx.send(embed=embed)
-        elif close_behavior == 'instant_delete':
-            try:
-                await ctx.channel.delete(reason=f"Ticket #{ticket['ticket_number']} closed")
-            except:
-                pass
+        confirm_embed = discord.Embed(
+            title="\U0001f512 Close Ticket?",
+            description=(
+                "Are you sure you want to close this ticket?"
+                + (f"\n**Reason:** {reason}" if reason else "")
+                + "\n\nThis action cannot be undone."
+            ),
+            color=0xE74C3C,
+            timestamp=datetime.utcnow()
+        )
+        confirm_view = TicketCloseConfirmView(self, ticket, ctx.author, reason)
+        await ctx.send(embed=confirm_embed, view=confirm_view)
 
     @commands.command(name='add')
     async def add_user_command(self, ctx, user: discord.Member):
