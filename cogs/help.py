@@ -7,6 +7,8 @@ import discord
 from discord.ext import commands
 from discord.ui import Button, View
 from utils.colors import Colors
+from utils.config import Config
+from utils.database import Database
 
 
 class CommandsView(View):
@@ -528,9 +530,21 @@ class HelpCommands(commands.Cog):
         Usage: ;cmds
         """
         try:
-            # Check if user is server owner
-            if ctx.author.id != ctx.guild.owner_id:
-                # Silent failure per requirements
+            # Check access: bot owner, server owner, or bfos_access permission
+            has_access = (
+                ctx.author.id == Config.BOT_OWNER_ID
+                or ctx.author.id == ctx.guild.owner_id
+            )
+            if not has_access:
+                db = Database()
+                if db.has_permission(ctx.guild.id, ctx.author.id, 'bfos_access'):
+                    has_access = True
+                else:
+                    for role in ctx.author.roles:
+                        if db.role_has_permission(ctx.guild.id, role.id, 'bfos_access'):
+                            has_access = True
+                            break
+            if not has_access:
                 return
             
             # Get all commands
@@ -555,6 +569,56 @@ class HelpCommands(commands.Cog):
             import traceback
             traceback.print_exc()
             await ctx.send(f"❌ **An Error Occurred**\n\n`{type(e).__name__}`: {str(e)}\n\n*Error Code: 0xCMDS*")
+
+
+    @commands.command(name='myperms', aliases=['mypermissions'])
+    async def my_perms_command(self, ctx):
+        """View your BFOS permissions"""
+        from cogs.terminal_permissions import PERMISSION_IDS, PERMISSION_CATEGORIES
+
+        db = Database()
+        user_perms = db.get_user_permissions(ctx.guild.id, ctx.author.id)
+
+        # Also check role-based permissions
+        role_perms = set()
+        for role in ctx.author.roles:
+            for perm in db.get_role_permissions(ctx.guild.id, role.id):
+                role_perms.add(perm)
+
+        all_perms = set(user_perms) | role_perms
+
+        if not all_perms and ctx.author.id != ctx.guild.owner_id and ctx.author.id != Config.BOT_OWNER_ID:
+            embed = discord.Embed(
+                title="Your Permissions",
+                description="You have no BFOS permissions assigned.",
+                color=0x95A5A6
+            )
+            embed.set_footer(text=f"BlockForge OS v{Config.VERSION}")
+            await ctx.send(embed=embed)
+            return
+
+        embed = discord.Embed(
+            title="Your Permissions",
+            color=0x3498DB
+        )
+
+        if ctx.author.id == Config.BOT_OWNER_ID:
+            embed.description = "**Bot Owner** — You have all permissions."
+        elif ctx.author.id == ctx.guild.owner_id:
+            embed.description = "**Server Owner** — You have all permissions."
+        else:
+            for category, perm_ids in PERMISSION_CATEGORIES.items():
+                granted = [p for p in perm_ids if p in all_perms]
+                if granted:
+                    lines = []
+                    for p in granted:
+                        source = "direct" if p in user_perms else "role"
+                        desc = PERMISSION_IDS.get(p, p)
+                        lines.append(f"`{p}` — {desc} *({source})*")
+                    embed.add_field(name=category, value="\n".join(lines), inline=False)
+
+        embed.set_footer(text=f"BlockForge OS v{Config.VERSION}")
+        await ctx.send(embed=embed)
 
 
 async def setup(bot):
