@@ -44,7 +44,7 @@ class Config:
     
     # Ollama Server Configuration
     AI_CONFIG = {
-        'host': 'http://localhost:11434',
+        'host': os.environ.get('OLLAMA_HOST', 'http://localhost:11434'),
     }
     
     # Default AI model

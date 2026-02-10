@@ -177,8 +177,8 @@ class AISystem(commands.Cog):
     }
     
     DEFAULT_MODEL = 'echo'
-    OLLAMA_HOST_CLOUD = 'http://localhost:11434'      # Cloud models route through local Ollama
-    OLLAMA_HOST_LOCAL = 'http://localhost:11434'  # Local models on same machine
+    OLLAMA_HOST_CLOUD = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
+    OLLAMA_HOST_LOCAL = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
     CONV_DIR = 'data/ai_conversations'
     
     def __init__(self, bot):
