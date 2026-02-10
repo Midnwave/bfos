@@ -425,6 +425,22 @@ class HelpCommands(commands.Cog):
                     'permission': 'ticket_close',
                     'examples': [';transcript'],
                     'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';ticketblacklist',
+                    'usage': ';ticketblacklist <user> [reason]',
+                    'description': 'Blacklist a user from creating tickets',
+                    'permission': 'ticket_blacklist',
+                    'examples': [';ticketblacklist @User spamming tickets'],
+                    'module': 'tickets'
+                },
+                {
+                    'cmd_name': ';ticketunblacklist',
+                    'usage': ';ticketunblacklist <user>',
+                    'description': 'Remove a user from the ticket blacklist',
+                    'permission': 'ticket_blacklist',
+                    'examples': [';ticketunblacklist @User'],
+                    'module': 'tickets'
                 }
             ],
             'xp': [

@@ -362,6 +362,9 @@ class Moderation(commands.Cog):
 
         # Missing permissions (user)
         if isinstance(error, commands.MissingPermissions):
+            # Silent for users with NO BFOS permissions (don't reveal staff commands)
+            if not self._user_has_any_bfos_permission(ctx.guild.id, ctx.author):
+                return
             embed = self._build_error_embed(
                 emoji="\U0001f512",
                 title="Missing Permissions",

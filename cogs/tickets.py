@@ -48,42 +48,141 @@ class TicketControlView(discord.ui.View):
 
 
 class TicketCloseConfirmView(discord.ui.View):
-    """Confirmation buttons before closing a ticket"""
+    """Persistent confirmation buttons before closing a ticket"""
 
-    def __init__(self, cog, ticket, closer: discord.Member, reason: str = None):
-        super().__init__(timeout=30)
+    def __init__(self, cog, ticket_id: int):
+        super().__init__(timeout=None)
         self.cog = cog
-        self.ticket = ticket
-        self.closer = closer
-        self.reason = reason
 
-    @discord.ui.button(label="Confirm Close", style=discord.ButtonStyle.danger, emoji="\u2705")
-    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.closer.id:
+        confirm_btn = discord.ui.Button(
+            label="Confirm Close", style=discord.ButtonStyle.danger,
+            emoji="\u2705", custom_id=f"bfos_ticket_closeconf_{ticket_id}_yes",
+        )
+        confirm_btn.callback = self.confirm_callback
+        self.add_item(confirm_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="Cancel", style=discord.ButtonStyle.secondary,
+            emoji="\u274c", custom_id=f"bfos_ticket_closeconf_{ticket_id}_no",
+        )
+        cancel_btn.callback = self.cancel_callback
+        self.add_item(cancel_btn)
+
+    async def confirm_callback(self, interaction: discord.Interaction):
+        ticket_id = int(interaction.data['custom_id'].split('_')[3])
+        pending = self.cog.get_close_pending(ticket_id)
+        if not pending:
+            await interaction.response.send_message("This close request is no longer valid.", ephemeral=True)
+            return
+        if interaction.user.id != pending['closer_id']:
             await interaction.response.send_message("Only the person who initiated the close can confirm.", ephemeral=True)
             return
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
-        await self.cog._execute_ticket_close(interaction.channel, self.closer, self.reason)
-        self.stop()
+        self.cog.delete_close_pending(ticket_id)
+        closer = interaction.guild.get_member(pending['closer_id'])
+        await self.cog._execute_ticket_close(interaction.channel, closer, pending.get('reason'))
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="\u274c")
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.closer.id:
+    async def cancel_callback(self, interaction: discord.Interaction):
+        ticket_id = int(interaction.data['custom_id'].split('_')[3])
+        pending = self.cog.get_close_pending(ticket_id)
+        if pending and interaction.user.id != pending['closer_id']:
             await interaction.response.send_message("Only the person who initiated the close can cancel.", ephemeral=True)
             return
         for item in self.children:
             item.disabled = True
+        self.cog.delete_close_pending(ticket_id)
         await interaction.response.edit_message(
             embed=discord.Embed(title="Close Cancelled", description="Ticket close has been cancelled.", color=0x95A5A6),
             view=self
         )
-        self.stop()
 
-    async def on_timeout(self):
+
+class TicketStaffConfirmView(discord.ui.View):
+    """Persistent staff confirmation for add/remove user requests"""
+
+    def __init__(self, cog, request_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+        approve_btn = discord.ui.Button(
+            label="Approve", style=discord.ButtonStyle.success,
+            emoji="\u2705", custom_id=f"bfos_ticket_addreq_{request_id}_approve",
+        )
+        approve_btn.callback = self.approve_callback
+        self.add_item(approve_btn)
+
+        deny_btn = discord.ui.Button(
+            label="Deny", style=discord.ButtonStyle.danger,
+            emoji="\u274c", custom_id=f"bfos_ticket_addreq_{request_id}_deny",
+        )
+        deny_btn.callback = self.deny_callback
+        self.add_item(deny_btn)
+
+    async def approve_callback(self, interaction: discord.Interaction):
+        request_id = int(interaction.data['custom_id'].split('_')[3])
+        request = self.cog.get_add_request(request_id)
+        if not request or request['status'] != 'pending':
+            await interaction.response.send_message("This request is no longer valid.", ephemeral=True)
+            return
+        perm_id = 'ticket_add_user' if request['action'] == 'add' else 'ticket_remove_user'
+        if not self.cog._has_ticket_permission(interaction.user, perm_id):
+            await interaction.response.send_message("You don't have permission to approve this.", ephemeral=True)
+            return
+        target = interaction.guild.get_member(request['target_user_id'])
+        if not target:
+            await interaction.response.send_message("Target user not found in server.", ephemeral=True)
+            return
+        channel = interaction.channel
+        if request['action'] == 'add':
+            await channel.set_permissions(target, read_messages=True, send_messages=True, embed_links=True, attach_files=True)
+            action_text = "added to"
+        else:
+            await channel.set_permissions(target, overwrite=None)
+            action_text = "removed from"
+        self.cog.update_add_request(request_id, 'approved')
         for item in self.children:
             item.disabled = True
+        requester = interaction.guild.get_member(request['requester_id'])
+        embed = discord.Embed(
+            title="\u2705 Request Approved",
+            description=(
+                f"{target.mention} has been {action_text} the ticket.\n\n"
+                f"Approved by {interaction.user.mention}"
+                + (f"\nRequested by {requester.mention}" if requester else "")
+            ),
+            color=0x2ECC71,
+            timestamp=datetime.utcnow()
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def deny_callback(self, interaction: discord.Interaction):
+        request_id = int(interaction.data['custom_id'].split('_')[3])
+        request = self.cog.get_add_request(request_id)
+        if not request or request['status'] != 'pending':
+            await interaction.response.send_message("This request is no longer valid.", ephemeral=True)
+            return
+        perm_id = 'ticket_add_user' if request['action'] == 'add' else 'ticket_remove_user'
+        if not self.cog._has_ticket_permission(interaction.user, perm_id):
+            await interaction.response.send_message("You don't have permission to deny this.", ephemeral=True)
+            return
+        self.cog.update_add_request(request_id, 'denied')
+        for item in self.children:
+            item.disabled = True
+        target = interaction.guild.get_member(request['target_user_id'])
+        target_text = target.mention if target else f"User {request['target_user_id']}"
+        action_text = "add" if request['action'] == 'add' else "remove"
+        embed = discord.Embed(
+            title="\u274c Request Denied",
+            description=(
+                f"Request to {action_text} {target_text} has been denied.\n\n"
+                f"Denied by {interaction.user.mention}"
+            ),
+            color=0xE74C3C,
+            timestamp=datetime.utcnow()
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 class TicketPanelView(discord.ui.View):
@@ -215,6 +314,34 @@ class TicketSystem(commands.Cog):
             user_id INTEGER,
             content TEXT,
             attachments TEXT DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute('''CREATE TABLE IF NOT EXISTS ticket_blacklist (
+            guild_id INTEGER,
+            user_id INTEGER,
+            blacklisted_by INTEGER,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (guild_id, user_id)
+        )''')
+
+        cursor.execute('''CREATE TABLE IF NOT EXISTS ticket_add_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER,
+            ticket_id INTEGER,
+            channel_id INTEGER,
+            requester_id INTEGER,
+            target_user_id INTEGER,
+            action TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+
+        cursor.execute('''CREATE TABLE IF NOT EXISTS ticket_close_pending (
+            ticket_id INTEGER PRIMARY KEY,
+            closer_id INTEGER,
+            reason TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
@@ -426,6 +553,121 @@ class TicketSystem(commands.Cog):
         conn.close()
         return [self._row_to_ticket(r) for r in rows]
 
+    # ==================== BLACKLIST METHODS ====================
+
+    def add_to_blacklist(self, guild_id, user_id, blacklisted_by, reason=None):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                'INSERT INTO ticket_blacklist (guild_id, user_id, blacklisted_by, reason) VALUES (?, ?, ?, ?)',
+                (guild_id, user_id, blacklisted_by, reason)
+            )
+            conn.commit()
+            success = True
+        except:
+            success = False
+        conn.close()
+        return success
+
+    def remove_from_blacklist(self, guild_id, user_id):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM ticket_blacklist WHERE guild_id = ? AND user_id = ?', (guild_id, user_id))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def is_ticket_blacklisted(self, guild_id, user_id):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM ticket_blacklist WHERE guild_id = ? AND user_id = ?', (guild_id, user_id))
+        result = cursor.fetchone() is not None
+        conn.close()
+        return result
+
+    # ==================== ADD/REMOVE REQUEST METHODS ====================
+
+    def create_add_request(self, guild_id, ticket_id, channel_id, requester_id, target_user_id, action):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO ticket_add_requests (guild_id, ticket_id, channel_id, requester_id, target_user_id, action)
+               VALUES (?, ?, ?, ?, ?, ?)''',
+            (guild_id, ticket_id, channel_id, requester_id, target_user_id, action)
+        )
+        request_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return request_id
+
+    def get_add_request(self, request_id):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM ticket_add_requests WHERE id = ?', (request_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            'id': row[0], 'guild_id': row[1], 'ticket_id': row[2], 'channel_id': row[3],
+            'requester_id': row[4], 'target_user_id': row[5], 'action': row[6],
+            'status': row[7], 'created_at': row[8]
+        }
+
+    def update_add_request(self, request_id, status):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE ticket_add_requests SET status = ? WHERE id = ?', (status, request_id))
+        conn.commit()
+        conn.close()
+
+    def get_pending_add_requests(self):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM ticket_add_requests WHERE status = ?', ('pending',))
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+
+    # ==================== CLOSE PENDING METHODS ====================
+
+    def set_close_pending(self, ticket_id, closer_id, reason=None):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT OR REPLACE INTO ticket_close_pending (ticket_id, closer_id, reason) VALUES (?, ?, ?)',
+            (ticket_id, closer_id, reason)
+        )
+        conn.commit()
+        conn.close()
+
+    def get_close_pending(self, ticket_id):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT ticket_id, closer_id, reason FROM ticket_close_pending WHERE ticket_id = ?', (ticket_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {'ticket_id': row[0], 'closer_id': row[1], 'reason': row[2]}
+
+    def delete_close_pending(self, ticket_id):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM ticket_close_pending WHERE ticket_id = ?', (ticket_id,))
+        conn.commit()
+        conn.close()
+
+    def get_all_close_pending(self):
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT ticket_id FROM ticket_close_pending')
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+
     # ==================== PERMISSION HELPERS ====================
 
     def _has_ticket_permission(self, member, permission_id):
@@ -461,6 +703,11 @@ class TicketSystem(commands.Cog):
         config = self.get_ticket_config(guild.id)
         if not config:
             await interaction.followup.send("Ticket system is not configured.", ephemeral=True)
+            return
+
+        # Check blacklist
+        if self.is_ticket_blacklisted(guild.id, user.id):
+            await interaction.followup.send("You have been blacklisted from creating tickets.", ephemeral=True)
             return
 
         # Check max tickets
@@ -580,6 +827,9 @@ class TicketSystem(commands.Cog):
             await interaction.response.send_message("You don't have permission to close this ticket.", ephemeral=True)
             return
 
+        # Store close pending in DB for persistence across restarts
+        self.set_close_pending(ticket['id'], user.id, reason)
+
         confirm_embed = discord.Embed(
             title="\U0001f512 Close Ticket?",
             description=(
@@ -590,7 +840,7 @@ class TicketSystem(commands.Cog):
             color=0xE74C3C,
             timestamp=datetime.utcnow()
         )
-        confirm_view = TicketCloseConfirmView(self, ticket, user, reason)
+        confirm_view = TicketCloseConfirmView(self, ticket['id'])
 
         if not interaction.response.is_done():
             await interaction.response.send_message(embed=confirm_embed, view=confirm_view)
@@ -772,6 +1022,9 @@ class TicketSystem(commands.Cog):
         if ctx.author.id != ticket['user_id'] and not self._has_ticket_permission(ctx.author, 'ticket_close'):
             return
 
+        # Store close pending in DB for persistence across restarts
+        self.set_close_pending(ticket['id'], ctx.author.id, reason)
+
         confirm_embed = discord.Embed(
             title="\U0001f512 Close Ticket?",
             description=(
@@ -782,7 +1035,7 @@ class TicketSystem(commands.Cog):
             color=0xE74C3C,
             timestamp=datetime.utcnow()
         )
-        confirm_view = TicketCloseConfirmView(self, ticket, ctx.author, reason)
+        confirm_view = TicketCloseConfirmView(self, ticket['id'])
         await ctx.send(embed=confirm_embed, view=confirm_view)
 
     @commands.command(name='add')
@@ -793,10 +1046,27 @@ class TicketSystem(commands.Cog):
         ticket = self.get_ticket_by_channel(ctx.channel.id)
         if not ticket:
             return
-        if not self._has_ticket_permission(ctx.author, 'ticket_add_user'):
-            return
-        await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
-        await ctx.send(f"\u2705 {user.mention} has been added to the ticket.")
+        if self._has_ticket_permission(ctx.author, 'ticket_add_user'):
+            # Staff can add directly
+            await ctx.channel.set_permissions(user, read_messages=True, send_messages=True, embed_links=True, attach_files=True)
+            await ctx.send(f"\u2705 {user.mention} has been added to the ticket.")
+        else:
+            # Member requests - needs staff confirmation
+            request_id = self.create_add_request(
+                ctx.guild.id, ticket['id'], ctx.channel.id,
+                ctx.author.id, user.id, 'add'
+            )
+            embed = discord.Embed(
+                title="\U0001f4dd Add User Request",
+                description=(
+                    f"{ctx.author.mention} wants to add {user.mention} to this ticket.\n\n"
+                    "A staff member must approve this request."
+                ),
+                color=0xF39C12,
+                timestamp=datetime.utcnow()
+            )
+            view = TicketStaffConfirmView(self, request_id)
+            await ctx.send(embed=embed, view=view)
 
     @commands.command(name='remove')
     async def remove_user_command(self, ctx, user: discord.Member):
@@ -806,13 +1076,30 @@ class TicketSystem(commands.Cog):
         ticket = self.get_ticket_by_channel(ctx.channel.id)
         if not ticket:
             return
-        if not self._has_ticket_permission(ctx.author, 'ticket_remove_user'):
-            return
         if user.id == ticket['user_id']:
             await ctx.send("\u274c Cannot remove the ticket creator.")
             return
-        await ctx.channel.set_permissions(user, overwrite=None)
-        await ctx.send(f"\u2705 {user.mention} has been removed from the ticket.")
+        if self._has_ticket_permission(ctx.author, 'ticket_remove_user'):
+            # Staff can remove directly
+            await ctx.channel.set_permissions(user, overwrite=None)
+            await ctx.send(f"\u2705 {user.mention} has been removed from the ticket.")
+        else:
+            # Member requests - needs staff confirmation
+            request_id = self.create_add_request(
+                ctx.guild.id, ticket['id'], ctx.channel.id,
+                ctx.author.id, user.id, 'remove'
+            )
+            embed = discord.Embed(
+                title="\U0001f4dd Remove User Request",
+                description=(
+                    f"{ctx.author.mention} wants to remove {user.mention} from this ticket.\n\n"
+                    "A staff member must approve this request."
+                ),
+                color=0xF39C12,
+                timestamp=datetime.utcnow()
+            )
+            view = TicketStaffConfirmView(self, request_id)
+            await ctx.send(embed=embed, view=view)
 
     @commands.command(name='rename')
     async def rename_command(self, ctx, *, name: str):
@@ -864,6 +1151,49 @@ class TicketSystem(commands.Cog):
         await self._send_transcript(ticket, ctx.guild)
         await ctx.send("\u2705 Transcript sent to the log channel.")
 
+    @commands.command(name='ticketblacklist')
+    async def ticketblacklist_command(self, ctx, user: discord.Member, *, reason: str = None):
+        """Blacklist a user from creating tickets"""
+        if not self.db.get_module_state(ctx.guild.id, 'tickets'):
+            return
+        if not self._has_ticket_permission(ctx.author, 'ticket_blacklist'):
+            await ctx.send("\u274c You don't have permission to blacklist users from tickets.", delete_after=10)
+            return
+        if self.is_ticket_blacklisted(ctx.guild.id, user.id):
+            await ctx.send(f"\u274c {user.mention} is already blacklisted from tickets.", delete_after=10)
+            return
+        self.add_to_blacklist(ctx.guild.id, user.id, ctx.author.id, reason)
+        embed = discord.Embed(
+            title="\U0001f6ab Ticket Blacklist",
+            description=(
+                f"{user.mention} has been blacklisted from creating tickets."
+                + (f"\n**Reason:** {reason}" if reason else "")
+            ),
+            color=0xE74C3C,
+            timestamp=datetime.utcnow()
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command(name='ticketunblacklist')
+    async def ticketunblacklist_command(self, ctx, user: discord.Member):
+        """Remove a user from the ticket blacklist"""
+        if not self.db.get_module_state(ctx.guild.id, 'tickets'):
+            return
+        if not self._has_ticket_permission(ctx.author, 'ticket_blacklist'):
+            await ctx.send("\u274c You don't have permission to manage the ticket blacklist.", delete_after=10)
+            return
+        if not self.is_ticket_blacklisted(ctx.guild.id, user.id):
+            await ctx.send(f"\u274c {user.mention} is not blacklisted from tickets.", delete_after=10)
+            return
+        self.remove_from_blacklist(ctx.guild.id, user.id)
+        embed = discord.Embed(
+            title="\u2705 Ticket Unblacklist",
+            description=f"{user.mention} has been removed from the ticket blacklist.",
+            color=0x2ECC71,
+            timestamp=datetime.utcnow()
+        )
+        await ctx.send(embed=embed)
+
     # ==================== PERSISTENT VIEW REGISTRATION ====================
 
     async def cog_load(self):
@@ -890,6 +1220,14 @@ class TicketSystem(commands.Cog):
                     self.bot.add_view(TicketPanelView(self, categories))
 
         conn.close()
+
+        # Register close confirmation views for pending close requests
+        for ticket_id in self.get_all_close_pending():
+            self.bot.add_view(TicketCloseConfirmView(self, ticket_id))
+
+        # Register staff confirmation views for pending add/remove requests
+        for request_id in self.get_pending_add_requests():
+            self.bot.add_view(TicketStaffConfirmView(self, request_id))
 
     async def deploy_panel(self, guild):
         """Deploy or update the ticket panel in the configured channel"""

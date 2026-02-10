@@ -66,6 +66,7 @@ PERMISSION_IDS = {
     'ticket_add_user': 'Add users to tickets',
     'ticket_remove_user': 'Remove users from tickets',
     'ticket_claim': 'Claim tickets',
+    'ticket_blacklist': 'Blacklist users from tickets',
     # XP System
     'xp_manage': 'Configure XP system',
     'xp_admin': 'Add/remove/set user XP',
@@ -83,7 +84,7 @@ PERMISSION_CATEGORIES = {
     'Embeds': ['embed_edit', 'embed_preview'],
     'BFOS': ['bfos_access', 'bfos_modules', 'bfos_config'],
     'AI Management': ['ai_manage', 'ai_blacklist', 'ai_bypass', 'ai_autorespond', 'ai_limits', 'ai_clear'],
-    'Tickets': ['ticket_manage', 'ticket_close', 'ticket_delete', 'ticket_add_user', 'ticket_remove_user', 'ticket_claim'],
+    'Tickets': ['ticket_manage', 'ticket_close', 'ticket_delete', 'ticket_add_user', 'ticket_remove_user', 'ticket_claim', 'ticket_blacklist'],
     'XP System': ['xp_manage', 'xp_admin'],
 }
 

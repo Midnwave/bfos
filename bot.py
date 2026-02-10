@@ -265,15 +265,6 @@ async def bfos_command(ctx):
         is_bot_owner = ctx.author.id == Config.BOT_OWNER_ID
         if is_bot_owner:
             print(f'{Colors.GREEN}[✓] Permission check passed - BOT OWNER (global access){Colors.RESET}')
-        elif not guild_data['setup_complete']:
-            if ctx.author.id != ctx.guild.owner_id:
-                print(f'{Colors.YELLOW}[INFO] Access denied - user is not server owner{Colors.RESET}')
-                await ctx.send(
-                    "❌ **Access Denied:** Only the server owner can run this command during initial setup.",
-                    delete_after=10
-                )
-                return
-            print(f'{Colors.GREEN}[✓] Permission check passed - server owner{Colors.RESET}')
         else:
             # Check: admin OR server owner OR bfos_access permission
             is_server_owner = ctx.author.id == ctx.guild.owner_id
